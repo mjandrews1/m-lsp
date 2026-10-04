@@ -34,7 +34,7 @@ export const C3_TYPES = new Set([
   "any", "anyfault", "typeid", "irexpr",
 ]);
 
-function tokenize(text: string): Token[] {
+export function tokenize(text: string): Token[] {
   const out: Token[] = [];
   let i = 0;
   const push = (kind: Token["kind"], start: number, end: number) => {
@@ -363,3 +363,6 @@ export const c3Plugin: LanguagePlugin = {
   extensions: [".c3", ".c3i", ".c3t"],
   analyse,
 };
+
+export { c3LintOnlyDiagnostics, C3_LINT_CODES } from "./lint";
+export type { C3LintOptions } from "./lint";

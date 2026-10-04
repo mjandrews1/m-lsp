@@ -1,0 +1,15 @@
+{
+  "failOn": "error",
+  "maxFunctionLines": 60,
+  "severity": {
+    "c3/array-param": "warning",
+    "c3/array-out-param": "warning",
+    "c3/abi-magic": "warning",
+    "c3/long-function": "warning",
+    "c3/sizeof-trap": "error",
+    "c3/fault-try": "error",
+    "c3/static-local": "error",
+    "c3/dup-include": "information"
+  },
+  "ignore": ["node_modules", ".git", "dist", "c3mumps.dSYM"]
+}

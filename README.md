@@ -14,6 +14,7 @@ packages/m-core/    M tokenizer, diagnostics, hover, goto
 packages/c3-core/   C3 tokenizer, diagnostics, hover, goto
 packages/server/    shared LSP host (stdio)
 packages/m-lint/    `m-lint` CLI (rsm#28) — reuses m-core rules
+packages/c3-lint/   `c3-lint` CLI (rsm#29) — reuses c3-core rules
 grammars/           m.tmLanguage.json, c3.tmLanguage.json
 tests/              unit + FileMan + c3m/c3fst fixtures
 ```
@@ -52,3 +53,15 @@ bun run m-lint -- --list-codes
 
 Rules live in `packages/m-core` (shared with the LSP). Config:
 `.mlintrc.json`. Exit codes: `0` clean · `1` diagnostics · `2` usage.
+
+
+## c3-lint (rsm#29)
+
+```sh
+bun run c3-lint -- --dir ~/c3mumps/src
+bun run c3-lint -- --format json file.c3
+bun run c3-lint -- --list-codes
+```
+
+Rules live in `packages/c3-core` (shared with the LSP). Config:
+`.c3lintrc.json`. Exit codes: `0` clean · `1` diagnostics · `2` usage.
