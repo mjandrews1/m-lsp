@@ -1,0 +1,15 @@
+{
+  "failOn": "error",
+  "maxLineLength": 256,
+  "severity": {
+    "m/postcond": "off",
+    "m/long-line": "off",
+    "m/trailing-whitespace": "off",
+    "m/deprecated-intrinsic": "warning",
+    "m/ncopy-compare": "warning",
+    "m/empty-subscript-order": "information",
+    "m/quit-arg-context": "warning",
+    "m/unknown-command": "warning"
+  },
+  "ignore": ["node_modules", ".git", "dist"]
+}

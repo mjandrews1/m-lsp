@@ -13,6 +13,7 @@ packages/core/      LanguagePlugin interface
 packages/m-core/    M tokenizer, diagnostics, hover, goto
 packages/c3-core/   C3 tokenizer, diagnostics, hover, goto
 packages/server/    shared LSP host (stdio)
+packages/m-lint/    `m-lint` CLI (rsm#28) — reuses m-core rules
 grammars/           m.tmLanguage.json, c3.tmLanguage.json
 tests/              unit + FileMan + c3m/c3fst fixtures
 ```
@@ -39,3 +40,15 @@ bun run server    # LSP on stdio
 
 DAP debugger · refactors/code actions · VS Code marketplace packaging ·
 C3 runtime coupling.
+
+
+## m-lint (rsm#28)
+
+```sh
+bun run m-lint -- --dir ~/fileman
+bun run m-lint -- --format json file.m
+bun run m-lint -- --list-codes
+```
+
+Rules live in `packages/m-core` (shared with the LSP). Config:
+`.mlintrc.json`. Exit codes: `0` clean · `1` diagnostics · `2` usage.

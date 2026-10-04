@@ -1,0 +1,10 @@
+{
+  "name": "@m-lsp/m-lint",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "m-lint": "src/main.ts"
+  },
+  "main": "src/main.ts"
+}

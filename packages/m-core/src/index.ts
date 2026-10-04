@@ -91,7 +91,7 @@ export const INTRINSICS: Record<string, { args: string; doc: string }> = {
 };
 
 /** Abbreviation → intrinsic full name (unambiguous only). */
-const INTR_ABBR: Record<string, string> = {
+export const INTR_ABBR_PUBLIC: Record<string, string> = {
   A: "ASCII", C: "CHAR", D: "DATA", E: "EXTRACT", F: "FIND", FN: "FNUMBER",
   G: "GET", I: "INCREMENT", J: "J", L: "LENGTH", N: "NAME", NA: "NAME",
   O: "ORDER", P: "PIECE", Q: "QUERY", QL: "QLENGTH", QS: "QSUBSCRIPT",
@@ -230,7 +230,7 @@ function resolveIntrinsic(raw: string): string | null {
   if (raw.startsWith("$$")) return null; // extrinsic call, not an intrinsic
   const name = raw.slice(1).toUpperCase();
   if (INTRINSICS[name]) return name;
-  if (INTR_ABBR[name] && INTRINSICS[INTR_ABBR[name]]) return INTR_ABBR[name];
+  if (INTR_ABBR_PUBLIC[name] && INTRINSICS[INTR_ABBR_PUBLIC[name]]) return INTR_ABBR_PUBLIC[name];
   // $Z* family — treat as known specials
   if (name.startsWith("Z")) return name;
   return null;
@@ -538,3 +538,6 @@ export const mPlugin: LanguagePlugin = {
   extensions: [".m", ".M", ".mumps"],
   analyse,
 };
+
+export { lintOnlyDiagnostics, LINT_CODES, DEPRECATED_INTRINSICS } from "./lint";
+export type { LintOptions } from "./lint";

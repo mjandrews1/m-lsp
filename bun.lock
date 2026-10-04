@@ -25,6 +25,13 @@
       "name": "@m-lsp/m-core",
       "version": "0.1.0",
     },
+    "packages/m-lint": {
+      "name": "@m-lsp/m-lint",
+      "version": "0.1.0",
+      "bin": {
+        "m-lint": "src/main.ts",
+      },
+    },
     "packages/server": {
       "name": "@m-lsp/server",
       "version": "0.1.0",
@@ -36,6 +43,8 @@
     "@m-lsp/core": ["@m-lsp/core@workspace:packages/core"],
 
     "@m-lsp/m-core": ["@m-lsp/m-core@workspace:packages/m-core"],
+
+    "@m-lsp/m-lint": ["@m-lsp/m-lint@workspace:packages/m-lint"],
 
     "@m-lsp/server": ["@m-lsp/server@workspace:packages/server"],
 
