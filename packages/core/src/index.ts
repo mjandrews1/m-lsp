@@ -77,7 +77,12 @@ export interface Analysis {
   references: Reference[];
   diagnostics: Diagnostic[];
   hover(offset: number): HoverInfo | null;
-  definitions(offset: number): Location[];
+  /**
+   * Definitions at `offset`.  When `ws` is supplied the plugin may
+   * resolve across files (`label^routine`, `$$fn`, `import`ed types);
+   * without it the answer is same-document only.
+   */
+  definitions(offset: number, ws?: import("./workspace").WorkspaceIndex): Location[];
 }
 
 export interface LanguagePlugin {
@@ -85,3 +90,5 @@ export interface LanguagePlugin {
   extensions: string[];
   analyse(uri: string, text: string): Analysis;
 }
+
+export { WorkspaceIndex } from "./workspace";

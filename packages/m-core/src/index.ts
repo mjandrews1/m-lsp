@@ -510,22 +510,105 @@ export function analyse(uri: string, text: string): Analysis {
     return null;
   };
 
-  const definitions = (offset: number): Location[] => {
+  const definitions = (
+    offset: number,
+    ws?: import("../../core/src/workspace").WorkspaceIndex,
+  ): Location[] => {
     for (const t of tokens) {
       if (offset < t.range.start || offset >= t.range.end) continue;
-      // find name
-      let name: string | null = null;
-      if (t.kind === "intrinsic" && t.text.startsWith("$$")) name = t.text.slice(2);
-      else if (t.kind === "ident") name = t.text;
-      else if (t.kind === "global") name = t.text;
-      if (!name) continue;
-      const hits: Location[] = [];
-      for (const s of symbols) {
-        if (s.name === name || s.name === name.replace(/^\^/, "")) {
-          hits.push({ uri, range: s.range });
+
+      // --- $$extrinsic or $$label^routine -------------------------------
+      if (t.kind === "intrinsic" && t.text.startsWith("$$")) {
+        const rest = t.text.slice(2);
+        const caret = rest.indexOf("^");
+        let label = rest;
+        let routine: string | null = null;
+        if (caret >= 0) {
+          label = rest.slice(0, caret);
+          routine = rest.slice(caret + 1);
         }
+        // same document first
+        const local = symbols
+          .filter((s) => s.name === label && s.kind === "label")
+          .map((s) => ({ uri, range: s.range }));
+        if (local.length && !routine) return local;
+        if (ws) {
+          if (routine) {
+            const out: Location[] = [];
+            for (const file of ws.filesForBase(routine)) {
+              out.push(...ws.labelInFile(file, label));
+            }
+            if (out.length) return out;
+          }
+          const cross = ws.lookupKind(label, "label");
+          if (cross.length) return cross;
+        }
+        return local;
       }
-      return hits;
+
+      // --- label^routine  (lexed as ident + global) ----------------------
+      if (t.kind === "ident") {
+        const next = tokens[tokens.indexOf(t) + 1];
+        if (next && next.kind === "global") {
+          const routine = next.text.slice(1);
+          if (offset >= next.range.start && offset < next.range.end) {
+            // cursor on the routine name: jump to its file
+            if (ws) {
+              const files = ws.filesForBase(routine);
+              if (files.length) return files.map((f) => ({ uri: f, range: { start: 0, end: 0 } }));
+            }
+            return [];
+          }
+          // cursor on the label
+          const local = symbols
+            .filter((s) => s.name === t.text && s.kind === "label")
+            .map((s) => ({ uri, range: s.range }));
+          if (ws) {
+            const out: Location[] = [];
+            for (const file of ws.filesForBase(routine)) {
+              out.push(...ws.labelInFile(file, t.text));
+            }
+            if (out.length) return out;
+            const cross = ws.lookupKind(t.text, ["label", "routine"]);
+            if (cross.length) return cross;
+          }
+          return local;
+        }
+        // plain ident: label / local / routine name
+        const local = symbols
+          .filter((s) => s.name === t.text)
+          .map((s) => ({ uri, range: s.range }));
+        if (local.length) return local;
+        if (ws) {
+          const cross = ws.lookupKind(t.text, ["label", "routine", "fn"]);
+          if (cross.length) return cross;
+        }
+        return local;
+      }
+
+      // --- global --------------------------------------------------------
+      if (t.kind === "global") {
+        // `label^routine` — the `^routine` is one global token.  If the
+        // previous token is an ident, this is a routine reference.
+        const idx = tokens.indexOf(t);
+        const prev = idx > 0 ? tokens[idx - 1] : undefined;
+        if (prev && prev.kind === "ident") {
+          const routine = t.text.slice(1);
+          if (ws) {
+            const files = ws.filesForBase(routine);
+            if (files.length) return files.map((f) => ({ uri: f, range: { start: 0, end: 0 } }));
+          }
+          return [];
+        }
+        const local = symbols
+          .filter((s) => s.name === t.text)
+          .map((s) => ({ uri, range: s.range }));
+        if (ws) {
+          const cross = ws.lookup(t.text);
+          if (cross.length) return cross;
+        }
+        return local;
+      }
     }
     return [];
   };

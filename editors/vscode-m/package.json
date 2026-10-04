@@ -1,0 +1,53 @@
+{
+  "name": "m-language",
+  "displayName": "M / MUMPS Language",
+  "description": "Language support for M (MUMPS / Mlang / RSM dialect) — thin client over m-lsp",
+  "version": "0.1.0",
+  "publisher": "mjandrews1",
+  "license": "SEE LICENSE IN m-lsp",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Programming Languages", "Linters", "Formatters"],
+  "activationEvents": ["onLanguage:m"],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "m",
+        "aliases": ["M", "MUMPS", "Mlang", "mumps"],
+        "extensions": [".m", ".mumps"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "m",
+        "scopeName": "source.m",
+        "path": "../../grammars/m.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "mLsp.restart",
+        "title": "M LSP: Restart Language Server"
+      }
+    ],
+    "configuration": {
+      "title": "M LSP",
+      "properties": {
+        "mLsp.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the m-lsp entry (default: bundled packages/server/src/main.ts run with bun)"
+        },
+        "mLsp.bunPath": {
+          "type": "string",
+          "default": "bun",
+          "description": "Bun executable used to launch the server"
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.0"
+  }
+}

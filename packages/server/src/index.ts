@@ -3,9 +3,14 @@
  *
  * Speaks LSP over stdio; dispatches to a `LanguagePlugin` by file
  * extension.  Adding a language is a new plugin, not a new server.
+ * Maintains a workspace symbol index so goto can cross files.
  */
 import * as rpc from "vscode-languageserver/node";
+import * as fs from "fs";
+import * as path from "path";
+import { fileURLToPath } from "url";
 import type { Analysis, LanguagePlugin } from "../../core/src/index";
+import { WorkspaceIndex } from "../../core/src/workspace";
 
 export interface HostOptions {
   plugins: LanguagePlugin[];
@@ -27,12 +32,12 @@ export function createHost(opts: HostOptions) {
 
   const connection = rpc.createConnection(rpc.ProposedFeatures.all);
   const docs = new Map<string, DocState>();
+  const wsIndex = new WorkspaceIndex();
 
   function pluginFor(uri: string): LanguagePlugin | undefined {
     const dot = uri.lastIndexOf(".");
     if (dot < 0) return undefined;
     const ext = uri.slice(dot).toLowerCase();
-    // strip query strings
     const clean = ext.split("?")[0];
     return byExt.get(clean);
   }
@@ -42,6 +47,7 @@ export function createHost(opts: HostOptions) {
     if (!p) return;
     const analysis = p.analyse(uri, text);
     docs.set(uri, { uri, text, analysis });
+    wsIndex.addFile(uri, analysis.symbols);
     connection.sendDiagnostics({
       uri,
       diagnostics: analysis.diagnostics.map((d) => ({
@@ -59,26 +65,87 @@ export function createHost(opts: HostOptions) {
     });
   }
 
-  connection.onInitialize((_params) => ({
-    capabilities: {
-      textDocumentSync: rpc.TextDocumentSyncKind.Incremental,
-      hoverProvider: true,
-      definitionProvider: true,
-      documentSymbolProvider: true,
-    },
-  }));
+  /** Scan a directory for plugin-owned files and index their symbols. */
+  function indexWorkspace(root: string, depth = 6): void {
+    const exts = [...byExt.keys()];
+    const walk = (dir: string, d: number) => {
+      if (d < 0) return;
+      let entries: string[];
+      try {
+        entries = fs.readdirSync(dir);
+      } catch {
+        return;
+      }
+      for (const e of entries) {
+        if (e === "node_modules" || e === ".git" || e === "dist") continue;
+        const p = path.join(dir, e);
+        let st: fs.Stats;
+        try {
+          st = fs.statSync(p);
+        } catch {
+          continue;
+        }
+        if (st.isDirectory()) walk(p, d - 1);
+        else {
+          const dot = e.lastIndexOf(".");
+          const ext = dot >= 0 ? e.slice(dot).toLowerCase() : "";
+          if (!exts.includes(ext)) continue;
+          const uri = "file://" + p;
+          if (docs.has(uri)) continue;
+          try {
+            const text = fs.readFileSync(p, "utf8");
+            const plugin = pluginFor(uri);
+            if (!plugin) continue;
+            const analysis = plugin.analyse(uri, text);
+            docs.set(uri, { uri, text, analysis });
+            wsIndex.addFile(uri, analysis.symbols);
+          } catch {
+            /* skip unreadable */
+          }
+        }
+      }
+    };
+    walk(root, depth);
+  }
+
+  connection.onInitialize((params) => {
+    const folders = params.workspaceFolders ?? [];
+    for (const f of folders) {
+      try {
+        indexWorkspace(fileURLToPath(f.uri));
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!folders.length && params.rootUri) {
+      try {
+        indexWorkspace(fileURLToPath(params.rootUri));
+      } catch {
+        /* ignore */
+      }
+    }
+    return {
+      capabilities: {
+        textDocumentSync: rpc.TextDocumentSyncKind.Incremental,
+        hoverProvider: true,
+        definitionProvider: true,
+        documentSymbolProvider: true,
+        workspaceSymbolProvider: true,
+      },
+    };
+  });
 
   connection.onDidOpen((e) => {
     refresh(e.textDocument.uri, e.textDocument.text);
   });
   connection.onDidChangeContent((e) => {
-    // full-text for v1 simplicity; Incremental can be layered later
     const st = docs.get(e.textDocument.uri);
     const text = e.textDocument.text ?? st?.text ?? "";
     refresh(e.textDocument.uri, text);
   });
   connection.onDidClose((e) => {
     docs.delete(e.textDocument.uri);
+    wsIndex.removeFile(e.textDocument.uri);
     connection.sendDiagnostics({ uri: e.textDocument.uri, diagnostics: [] });
   });
 
@@ -100,11 +167,37 @@ export function createHost(opts: HostOptions) {
     const st = docs.get(e.textDocument.uri);
     if (!st) return null;
     const offset = lspToOffset(st.text, e.textDocument.uri, e.position);
-    const defs = st.analysis.definitions(offset);
-    return defs.map((d) => ({
-      uri: d.uri,
-      range: offsetRangeToLsp(st.text, d.range.start, d.range.end),
-    }));
+    const defs = st.analysis.definitions(offset, wsIndex);
+    return defs.map((d) => {
+      const target = docs.get(d.uri);
+      const text = target?.text ?? "";
+      return {
+        uri: d.uri,
+        range: offsetRangeToLsp(text, d.range.start, d.range.end),
+      };
+    });
+  });
+
+  connection.onWorkspaceSymbol((e) => {
+    const query = (e.query ?? "").toLowerCase();
+    const out: rpc.SymbolInformation[] = [];
+    // walk every indexed file's symbols
+    for (const [uri, st] of docs) {
+      for (const s of st.analysis.symbols) {
+        if (query && !s.name.toLowerCase().includes(query)) continue;
+        out.push({
+          name: s.name,
+          kind: mapSymbolKind(s.kind),
+          location: {
+            uri,
+            range: offsetRangeToLsp(st.text, s.range.start, s.range.end),
+          },
+          containerName: s.container,
+        });
+        if (out.length > 500) return out;
+      }
+    }
+    return out;
   });
 
   connection.onDocumentSymbol((e) => {
@@ -125,7 +218,7 @@ export function createHost(opts: HostOptions) {
     };
   }
 
-  return { connection, refresh, docs };
+  return { connection, refresh, docs, wsIndex, indexWorkspace };
 }
 
 function offsetToPosition(text: string, offset: number): rpc.Position {

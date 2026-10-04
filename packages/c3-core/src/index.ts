@@ -344,13 +344,45 @@ export function analyse(uri: string, text: string): Analysis {
     return null;
   };
 
-  const definitions = (offset: number): Location[] => {
+  const definitions = (
+    offset: number,
+    ws?: import("../../core/src/workspace").WorkspaceIndex,
+  ): Location[] => {
     for (const t of tokens) {
       if (offset < t.range.start || offset >= t.range.end) continue;
       if (t.kind !== "ident" && t.kind !== "type") continue;
-      return symbols
+
+      // same document first
+      const local = symbols
         .filter((s) => s.name === t.text)
         .map((s) => ({ uri, range: s.range }));
+      if (local.length) return local;
+
+      // `mod::name` — look up `name` in the workspace (imported type/fn)
+      const idx = tokens.indexOf(t);
+      const prev = idx > 0 ? tokens[idx - 1] : undefined;
+      const next = idx + 1 < tokens.length ? tokens[idx + 1] : undefined;
+      let lookupName = t.text;
+      if (prev && prev.text === "::") {
+        // cursor on the member of a qualified name
+        lookupName = t.text;
+      } else if (next && next.text === "::") {
+        // cursor on the module prefix — jump to that module's file
+        if (ws) {
+          const files = ws.filesForBase(t.text);
+          if (files.length) return files.map((f) => ({ uri: f, range: { start: 0, end: 0 } }));
+        }
+        return [];
+      }
+
+      if (ws) {
+        // prefer fn / type over params/vars when crossing files
+        const cross = ws.lookupKind(lookupName, ["fn", "type", "var"]);
+        if (cross.length) return cross;
+        const any = ws.lookup(lookupName);
+        if (any.length) return any;
+      }
+      return local;
     }
     return [];
   };

@@ -17,6 +17,7 @@ packages/m-lint/    `m-lint` CLI (rsm#28) — reuses m-core rules
 packages/c3-lint/   `c3-lint` CLI (rsm#29) — reuses c3-core rules
 grammars/           m.tmLanguage.json, c3.tmLanguage.json
 tests/              unit + FileMan + c3m/c3fst fixtures
+editors/            VS Code thin clients (vscode-m, vscode-c3)
 ```
 
 ## v1 acceptance (rsm#27)
@@ -65,3 +66,27 @@ bun run c3-lint -- --list-codes
 
 Rules live in `packages/c3-core` (shared with the LSP). Config:
 `.c3lintrc.json`. Exit codes: `0` clean · `1` diagnostics · `2` usage.
+
+
+## VS Code clients (rsm#27)
+
+Thin clients over the one shared host — not four parallel servers.
+
+```sh
+# development: open VS Code with the extension loaded
+code --extensionDevelopmentPath=editors/vscode-m
+code --extensionDevelopmentPath=editors/vscode-c3
+```
+
+Both spawn `packages/server/src/main.ts` with `bun` over stdio.
+Override with `mLsp.serverPath` / `c3Lsp.serverPath`.
+
+## Workspace-wide goto
+
+`definitions(offset, WorkspaceIndex)` resolves across files:
+
+| M | `label^routine` → routine file + label · cursor on routine name → file · `$$fn` / `$$label^routine` |
+| C3 | `fn` / `type` across files · cursor on `mod::` module prefix → module file |
+
+The host indexes workspace files on `initialize` and keeps the index
+live on `didOpen`/`didClose`.
