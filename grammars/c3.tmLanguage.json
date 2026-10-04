@@ -1,0 +1,43 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "C3",
+  "scopeName": "source.c3",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#string" },
+    { "include": "#keyword" },
+    { "include": "#type" },
+    { "include": "#extern" },
+    { "include": "#number" }
+  ],
+  "repository": {
+    "comment": {
+      "patterns": [
+        { "match": "//.*$", "name": "comment.line.double-slash.c3" },
+        { "begin": "/\\*", "end": "\\*/", "name": "comment.block.c3" }
+      ]
+    },
+    "string": {
+      "patterns": [
+        { "begin": "\"", "end": "\"", "name": "string.quoted.double.c3" },
+        { "begin": "'", "end": "'", "name": "string.quoted.single.c3" }
+      ]
+    },
+    "keyword": {
+      "match": "\\b(alias|asm|assert|attribute|bitstruct|break|case|catch|const|continue|default|defer|do|else|enum|export|extern|false|fault|fn|foreach|if|import|inline|macro|module|nextcase|null|operator|out|private|public|return|rstring|struct|switch|tlocal|true|try|typedef|union|var|void|while)\\b",
+      "name": "keyword.control.c3"
+    },
+    "type": {
+      "match": "\\b(bool|char|ichar|double|float|int|isz|long|short|uint|ulong|ushort|usz|void|ZString|String|any|anyfault|typeid)\\b",
+      "name": "storage.type.c3"
+    },
+    "extern": {
+      "match": "\\bextern\\s+fn\\b",
+      "name": "keyword.other.extern.c3"
+    },
+    "number": {
+      "match": "\\b0[xX][0-9a-fA-F_]+\\b|\\b[0-9][0-9_]*(\\.[0-9_]*)?([eE][+-]?[0-9]+)?\\b",
+      "name": "constant.numeric.c3"
+    }
+  }
+}

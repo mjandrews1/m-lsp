@@ -1,0 +1,53 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "M",
+  "scopeName": "source.m",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#string" },
+    { "include": "#global" },
+    { "include": "#intrinsic" },
+    { "include": "#label" },
+    { "include": "#command" },
+    { "include": "#number" },
+    { "include": "#operator" }
+  ],
+  "repository": {
+    "comment": {
+      "match": ";.*$",
+      "name": "comment.line.semicolon.m"
+    },
+    "string": {
+      "begin": "\"",
+      "end": "\"",
+      "name": "string.quoted.double.m",
+      "patterns": [
+        { "match": "\"\"", "name": "constant.character.escape.m" }
+      ]
+    },
+    "global": {
+      "match": "\\^[%A-Za-z][%A-Za-z0-9]*",
+      "name": "variable.other.global.m"
+    },
+    "intrinsic": {
+      "match": "\\$\\$?[%A-Za-z][%A-Za-z0-9]*",
+      "name": "support.function.intrinsic.m"
+    },
+    "label": {
+      "match": "^[%A-Za-z][%A-Za-z0-9]*",
+      "name": "entity.name.function.label.m"
+    },
+    "command": {
+      "match": "(?i)\\b(B|BREAK|C|CLOSE|D|DO|E|ELSE|F|FOR|G|GOTO|H|HALT|HANG|I|IF|J|JOB|K|KILL|L|LOCK|M|MERGE|N|NEW|O|OPEN|Q|QUIT|R|READ|S|SET|U|USE|V|VIEW|W|WRITE|X|XECUTE)\\b",
+      "name": "keyword.control.m"
+    },
+    "number": {
+      "match": "([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][+-]?[0-9]+)?",
+      "name": "constant.numeric.m"
+    },
+    "operator": {
+      "match": "\\*\\*|//|'&|'!|'\\[|'\\]\\]|'\\]|'=|'<|'>|]]|<=|>=|\\\\|[_=<>+\\-*/&#\\[\\]?!]",
+      "name": "keyword.operator.m"
+    }
+  }
+}

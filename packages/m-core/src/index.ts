@@ -1,0 +1,540 @@
+/**
+ * M language core — tokenizer, symbol pass, diagnostics, hover, goto.
+ *
+ * Semantics grounded in RSM (`rsm-upstream` ad679d0) and our ISO-fix
+ * record (`_rsm/UPSTREAM-DIFF.md`).  Surface named in docs/DESIGN.md §3.1.
+ */
+import type {
+  Analysis,
+  Diagnostic,
+  HoverInfo,
+  LanguagePlugin,
+  Location,
+  Reference,
+  SymbolInfo,
+  Token,
+} from "../../core/src/index";
+
+// ---------------------------------------------------------------- tables
+
+/** Commands recognised in direct mode and routines (ISO / RSM). */
+export const COMMANDS = new Set([
+  "BREAK", "B",
+  "CLOSE", "C",
+  "DO", "D",
+  "ELSE", "E",
+  "FOR", "F",
+  "GOTO", "G",
+  "HALT", "H",
+  "HANG", "H",
+  "IF", "I",
+  "JOB", "J",
+  "KILL", "K",
+  "LOCK", "L",
+  "MERGE", "M",
+  "NEW", "N",
+  "OPEN", "O",
+  "QUIT", "Q",
+  "READ", "R",
+  "SET", "S",
+  "USE", "U",
+  "VIEW", "V",
+  "WRITE", "W",
+  "XECUTE", "X",
+]);
+
+/** Full names of abbreviations that collide (`H` is HALT or HANG). */
+const CMD_FULL = new Map<string, string>([
+  ["B", "BREAK"], ["C", "CLOSE"], ["D", "DO"], ["E", "ELSE"], ["F", "FOR"],
+  ["G", "GOTO"], ["H", "HALT"], ["I", "IF"], ["J", "JOB"], ["K", "KILL"],
+  ["L", "LOCK"], ["M", "MERGE"], ["N", "NEW"], ["O", "OPEN"], ["Q", "QUIT"],
+  ["R", "READ"], ["S", "SET"], ["U", "USE"], ["V", "VIEW"], ["W", "WRITE"],
+  ["X", "XECUTE"],
+]);
+
+/** Intrinsic functions — unambiguous abbreviations map to full names. */
+export const INTRINSICS: Record<string, { args: string; doc: string }> = {
+  ASCII: { args: "(expr[,pos])", doc: "Character code of `expr` at `pos` (default 1). Out of range → **-1**." },
+  CHAR: { args: "(n1[,...])", doc: "String of chars for codes 0–255. Out-of-range args contribute nothing." },
+  DATA: { args: "(ref)", doc: "Node state: **0** undefined · **1** value only · **10** descendants only · **11** both. Takes the reference **unevaluated**." },
+  EXTRACT: { args: "(expr[,from[,to]])", doc: "Substring by 1-based character positions." },
+  FIND: { args: "(expr,substr[,start])", doc: "1-based position **after** `substr` in `expr`, else **0**. Empty `substr` → `start`." },
+  FNUMBER: { args: "(num,code[,rnd])", doc: "Format `num`. Codes: `,` groups · `+` leading plus · `-` suppress sign · `T` trailing sign · `P` parentheses." },
+  GET: { args: "(ref[,default])", doc: "Value of `ref`, or `default` (or empty) if undefined. **Never errors** on undefined. First arg unevaluated." },
+  H: { args: "", doc: "`$HOROLOG` — days,seconds since 1840-12-31. Alias of `$HOROLOG`." },
+  HOROLOG: { args: "", doc: "days,seconds since 1840-12-31. Writes as `0,0` in our ports' stub." },
+  INCREMENT: { args: "(ref[,delta])", doc: "Add `delta` (default 1) to `ref`, store, return the **new** value. Undefined counts as 0." },
+  J: { args: " / (expr,size[,rnd])", doc: "`$J` alone is **$JOB**. `$J(expr,size[,rnd])` is **$JUSTIFY** — right-justify / round." },
+  JOB: { args: "", doc: "Job number of this process." },
+  JUSTIFY: { args: "(expr,size[,rnd])", doc: "Right-justify `expr` in `size`. 3-arg form rounds `num` to `rnd` decimals." },
+  LENGTH: { args: "(expr[,delim])", doc: "Character count, or piece count when `delim` is given." },
+  NAME: { args: "(ref[,n])", doc: "Canonical name of `ref`, optionally truncated to `n` subscripts. String subscripts are quoted." },
+  ORDER: { args: "(ref[,dir])", doc: "Next (`dir=1`) / previous (`dir=-1`) sibling subscript. **Empty subscript is the before-first / after-last marker at any position** (rsm#14, ISO 9.9). First arg unevaluated." },
+  PIECE: { args: "(expr,delim[,from[,to]])", doc: "Piece(s) of `expr` delimited by `delim`." },
+  Q: { args: "(ref[,dir])", doc: "`$QUERY` — next/previous node in tree-walk order (parent, children, next sibling)." },
+  QLENGTH: { args: "(name)", doc: "Number of subscripts in a closed name string like `^A(1,2)`." },
+  QUERY: { args: "(ref[,dir])", doc: "Next/previous node in preorder tree walk. First arg unevaluated." },
+  QSUBSCRIPT: { args: "(name,n)", doc: "Subscript `n` of a closed name string. `n=0` is the naked name." },
+  RANDOM: { args: "(n)", doc: "Random integer in `0 .. n-1`." },
+  REVERSE: { args: "(expr)", doc: "Reverse `expr`." },
+  RE: { args: "(expr)", doc: "`$REVERSE`." },
+  STACK: { args: "", doc: "Current stack depth. 0 in direct mode." },
+  ST: { args: "(n[,code])", doc: "Stack level info. Level 0 = `RUN`/`JOB`; `PLACE` / `MCODE` / `ECODE` codes." },
+  T: { args: "", doc: "**`$TEST`** — 1 if the last `IF` was true (or a `SET $TEST` ran). Not `$TEXT`." },
+  TEST: { args: "", doc: "1 if the last `IF` was true. ISO 7.2.4: `ELSE` runs iff `$TEST` is 0 (rsm#12)." },
+  TEXT: { args: "(ref)", doc: "Source line of a routine ref (`tag^routine`, `+n^routine`). Empty when no routine is loaded. **Bare `$TEXT` is not a special variable** (M8)." },
+  TRANSLATE: { args: "(expr,map[,new])", doc: "Map chars of `expr` through `map`→`new`. Unmapped-of-`new` chars are **deleted**." },
+  TR: { args: "(expr,map[,new])", doc: "`$TRANSLATE` when parenthesised; bare `$TR` is `$TRESTART`." },
+  TLEVEL: { args: "", doc: "Transaction level. **0** outside a transaction (rsm#15, ISO 6.3.20). Upstream RSM raises M8 — our ports report 0." },
+  TRESTART: { args: "", doc: "Transaction restart count. **0** outside a transaction (rsm#15)." },
+  Z: { args: "", doc: "Implementation-specific `$Z*` set. Hover a concrete `$ZNAME` for its meaning." },
+};
+
+/** Abbreviation → intrinsic full name (unambiguous only). */
+const INTR_ABBR: Record<string, string> = {
+  A: "ASCII", C: "CHAR", D: "DATA", E: "EXTRACT", F: "FIND", FN: "FNUMBER",
+  G: "GET", I: "INCREMENT", J: "J", L: "LENGTH", N: "NAME", NA: "NAME",
+  O: "ORDER", P: "PIECE", Q: "QUERY", QL: "QLENGTH", QS: "QSUBSCRIPT",
+  R: "RANDOM", RE: "REVERSE", S: "STACK", ST: "ST", T: "TEST",
+  TR: "TR", TL: "TLEVEL",
+};
+
+/** Special variables that are not functions. */
+export const SPECIALS: Record<string, string> = {
+  H: "`$HOROLOG` — days,seconds since 1840-12-31.",
+  HOROLOG: "days,seconds since 1840-12-31.",
+  IO: "Current device.",
+  J: "Job number (`$JOB`).",
+  JOB: "Job number of this process.",
+  P: "`$PIECE` default delimiter (space).",
+  Q: "`$QUIT` — 1 if a `QUIT` can return a value.",
+  S: "`$REFERENCE` naked indicator path is `$S`? No — `$S` is `$STACK`.",
+  STACK: "Current stack depth (0 in direct mode).",
+  T: "**`$TEST`** — 1 if the last `IF` was true. Not `$TEXT`.",
+  TEST: "1 if the last `IF` was true. `ELSE` runs iff this is 0 (ISO 7.2.4, rsm#12).",
+  TL: "`$TLEVEL`.",
+  TLEVEL: "**0** outside a transaction (rsm#15).",
+  TR: "`$TRESTART`.",
+  TRESTART: "**0** outside a transaction (rsm#15).",
+  X: "`$X` — cursor column.",
+  Y: "`$Y` — cursor row.",
+};
+
+// ---------------------------------------------------------------- lexer
+
+export function tokenize(text: string): Token[] {
+  const out: Token[] = [];
+  let i = 0;
+  const push = (kind: Token["kind"], start: number, end: number) => {
+    out.push({ kind, text: text.slice(start, end), range: { start, end } });
+  };
+  while (i < text.length) {
+    const c = text[i];
+    // comment to EOL
+    if (c === ";") {
+      const s = i;
+      while (i < text.length && text[i] !== "\n") i++;
+      push("comment", s, i);
+      continue;
+    }
+    // whitespace
+    if (c === " " || c === "\t" || c === "\n" || c === "\r") {
+      const s = i;
+      while (i < text.length && " \t\n\r".includes(text[i])) i++;
+      push("whitespace", s, i);
+      continue;
+    }
+    // string
+    if (c === '"') {
+      const s = i;
+      i++;
+      while (i < text.length) {
+        if (text[i] === '"') {
+          if (text[i + 1] === '"') { i += 2; continue; }
+          i++;
+          break;
+        }
+        i++;
+      }
+      push("string", s, i);
+      continue;
+    }
+    // global
+    if (c === "^") {
+      const s = i;
+      i++;
+      while (i < text.length && /[A-Za-z%0-9]/.test(text[i])) i++;
+      push("global", s, i);
+      continue;
+    }
+    // intrinsic / special  ($NAME)
+    if (c === "$") {
+      const s = i;
+      i++;
+      if (text[i] === "$") i++; // extrinsic $$foo
+      while (i < text.length && /[A-Za-z%0-9]/.test(text[i])) i++;
+      push("intrinsic", s, i);
+      continue;
+    }
+    // number
+    if (/[0-9]/.test(c) || (c === "." && /[0-9]/.test(text[i + 1] ?? ""))) {
+      const s = i;
+      while (i < text.length && /[0-9]/.test(text[i])) i++;
+      if (text[i] === ".") { i++; while (i < text.length && /[0-9]/.test(text[i])) i++; }
+      if (text[i] === "e" || text[i] === "E") {
+        const save = i;
+        i++;
+        if (text[i] === "+" || text[i] === "-") i++;
+        if (/[0-9]/.test(text[i] ?? "")) {
+          while (i < text.length && /[0-9]/.test(text[i])) i++;
+        } else i = save;
+      }
+      push("number", s, i);
+      continue;
+    }
+    // operators (longest first)
+    const ops = ["**", "'", ">=", "<=", "<>", "'=", "'<", "'>", "'&", "'!", "'[", "']", "']]",
+      "]]", "_", "=", "<", ">", "+", "-", "*", "/", "\\", "#", "&", "!", "[", "]", "?", "@"];
+    let matched = "";
+    for (const o of ops) {
+      if (text.startsWith(o, i)) { matched = o; break; }
+    }
+    if (matched) {
+      push("operator", i, i + matched.length);
+      i += matched.length;
+      continue;
+    }
+    // punct
+    if ("(),:".includes(c)) {
+      push("punct", i, i + 1);
+      i++;
+      continue;
+    }
+    // identifier (label, command, local)
+    if (/[A-Za-z%]/.test(c)) {
+      const s = i;
+      while (i < text.length && /[A-Za-z0-9%]/.test(text[i])) i++;
+      push("ident", s, i);
+      continue;
+    }
+    push("unknown", i, i + 1);
+    i++;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- analysis
+
+function resolveIntrinsic(raw: string): string | null {
+  // raw is like "$DATA" or "$D" or "$$foo"
+  if (raw.startsWith("$$")) return null; // extrinsic call, not an intrinsic
+  const name = raw.slice(1).toUpperCase();
+  if (INTRINSICS[name]) return name;
+  if (INTR_ABBR[name] && INTRINSICS[INTR_ABBR[name]]) return INTR_ABBR[name];
+  // $Z* family — treat as known specials
+  if (name.startsWith("Z")) return name;
+  return null;
+}
+
+function isIntrinsicName(raw: string): boolean {
+  return raw.startsWith("$") && !raw.startsWith("$$") && raw.length > 1;
+}
+
+export function analyse(uri: string, text: string): Analysis {
+  const tokens = tokenize(text);
+  const diagnostics: Diagnostic[] = [];
+  const symbols: SymbolInfo[] = [];
+  const references: Reference[] = [];
+
+  // Split into lines for IF/ELSE and command structure.
+  interface Line {
+    start: number;
+    end: number;
+    tokens: Token[]; // non-ws
+  }
+  const lines: Line[] = [];
+  {
+    let cur: Token[] = [];
+    let lineStart = 0;
+    for (const t of tokens) {
+      if (t.kind === "whitespace" && t.text.includes("\n")) {
+        // break on first newline inside
+        const parts = t.text.split("\n");
+        if (cur.length || true) {
+          lines.push({ start: lineStart, end: t.range.start, tokens: cur });
+          cur = [];
+          lineStart = t.range.end;
+        }
+        continue;
+      }
+      if (t.kind !== "whitespace") cur.push(t);
+    }
+    lines.push({ start: lineStart, end: text.length, tokens: cur });
+  }
+
+  // Label at start of line:  LABEL  or  LABEL(args)  or  label^routine
+  for (const line of lines) {
+    const first = line.tokens[0];
+    if (!first) continue;
+    if (first.kind === "ident") {
+      // label^routine at col 0-ish
+      const second = line.tokens[1];
+      if (second && second.kind === "operator" && second.text === "^") {
+        // not a label — this is a routine-ref expression
+      } else if (second && second.kind === "punct" && second.text === "(") {
+        symbols.push({ name: first.text, kind: "label", range: first.range });
+        references.push({ name: first.text, kind: "label", range: first.range, isDefinition: true });
+      } else {
+        // label followed by whitespace then command — token already stripped ws
+        // so a label is an ident that is NOT a known command, or is a command
+        // used as a label (rare).  We treat leading ident before a command-ish
+        // or at EOL as a label.
+        const isCmd = COMMANDS.has(first.text.toUpperCase());
+        const next = line.tokens[1];
+        const nextLooksLikeCmd = next && next.kind === "ident" && COMMANDS.has(next.text.toUpperCase());
+        if (!isCmd || nextLooksLikeCmd) {
+          symbols.push({ name: first.text, kind: "label", range: first.range });
+          references.push({ name: first.text, kind: "label", range: first.range, isDefinition: true });
+        }
+      }
+    }
+  }
+
+  // Walk tokens: commands, post-conditionals, refs, intrinsics.
+  let sawIf = 0; // depth of IFs awaiting possible ELSE on this / recent lines
+  let ifStack: number[] = []; // per-line IF counts for ELSE binding
+  let lineHasIf = 0;
+
+  const pushDiag = (d: Diagnostic) => diagnostics.push(d);
+
+  for (const line of lines) {
+    lineHasIf = 0;
+    const toks = line.tokens;
+    let idx = 0;
+    // skip label
+    if (toks[0] && toks[0].kind === "ident") {
+      const second = toks[1];
+      const isLabel =
+        (second && second.kind === "punct" && second.text === "(") ||
+        (second && second.kind === "ident" && COMMANDS.has(second.text.toUpperCase())) ||
+        (!second) ||
+        (second && second.kind === "operator" && second.text !== "^");
+      if (isLabel && !(toks[0].kind === "ident" && COMMANDS.has(toks[0].text.toUpperCase()) && !second)) {
+        // fall through — but if it is clearly a label we already recorded
+        const looksLabel =
+          (second && second.kind === "ident" && COMMANDS.has(second.text.toUpperCase())) ||
+          (second && second.kind === "punct" && second.text === "(") ||
+          !second;
+        if (looksLabel && !COMMANDS.has(toks[0].text.toUpperCase())) idx = 1;
+        else if (looksLabel && COMMANDS.has(toks[0].text.toUpperCase()) && second && second.kind === "ident") idx = 1;
+      }
+    }
+
+    while (idx < toks.length) {
+      const t = toks[idx];
+      // command word
+      if (t.kind === "ident" && COMMANDS.has(t.text.toUpperCase())) {
+        const up = t.text.toUpperCase();
+        const full = CMD_FULL.get(t.text.toUpperCase()) ?? up;
+        // H is HALT or HANG — disambiguate is not required for v1 diagnostics
+        t.kind = "command";
+        references.push({ name: full, kind: "label", range: t.range, isDefinition: false });
+
+        if (full === "IF") lineHasIf++;
+        if (full === "ELSE") {
+          if (lineHasIf === 0 && sawIf === 0) {
+            pushDiag({
+              range: t.range,
+              message: "`ELSE` with no preceding `IF` — ISO 7.2.4 binds ELSE to the nearest IF (rsm#12).",
+              severity: "error",
+              code: "m/unbalanced-else",
+            });
+          } else if (lineHasIf > 0) {
+            lineHasIf--;
+          } else {
+            sawIf--;
+          }
+        }
+        if (full === "QUIT") {
+          // QUIT with argument at file scope (no enclosing DO/FOR block marker)
+          // v1 heuristic: QUIT with an expression token right after, on a line
+          // that is not inside a FOR/DO we can see.  We only flag QUIT expr at
+          // the top level of a line whose command is QUIT and which has a
+          // following expression and no ^ or ( block context.
+          const next = toks[idx + 1];
+          if (next && (next.kind === "number" || next.kind === "string" ||
+            (next.kind === "ident" && !COMMANDS.has(next.text.toUpperCase())) ||
+            (next.kind === "intrinsic") || (next.kind === "global") ||
+            (next.kind === "operator" && (next.text === "-" || next.text === "+" || next.text === "$" || next.text === "(")))) {
+            // argless QUIT is `Q` alone or `Q:` postcond then EOL / next cmd
+            // If next is `:` this is a post-conditional, not an argument.
+            if (!(next.kind === "punct" && next.text === ":")) {
+              pushDiag({
+                range: t.range,
+                message: "`QUIT` with an argument is only valid inside a `DO` block or `FOR` body. Argumentless `QUIT` is the top-level form (ISO 8.1.2).",
+                severity: "warning",
+                code: "m/quit-arg-context",
+              });
+            }
+          }
+        }
+        idx++;
+        // post-conditional `:` immediately after command
+        if (toks[idx] && toks[idx].kind === "punct" && toks[idx].text === ":") {
+          const colon = toks[idx];
+          const exprStart = toks[idx + 1];
+          const isExpr = exprStart &&
+            !(exprStart.kind === "ident" && COMMANDS.has(exprStart.text.toUpperCase())) &&
+            !(exprStart.kind === "punct" && exprStart.text === "!") &&
+            exprStart.kind !== "comment";
+          if (!isExpr) {
+            pushDiag({
+              range: colon.range,
+              message: "Post-conditional `:` with no expression.",
+              severity: "error",
+              code: "m/empty-postcond",
+            });
+          } else {
+            pushDiag({
+              range: { start: colon.range.start, end: exprStart.range.end },
+              message: "Post-conditional — the command runs only when this expression is true (ISO 7.1.3).",
+              severity: "information",
+              code: "m/postcond",
+            });
+          }
+          idx++;
+        }
+        continue;
+      }
+      // also allow a lone ident that looks like a command abbreviation already handled
+      if (t.kind === "ident" && idx === 0 && COMMANDS.has(t.text.toUpperCase())) {
+        idx++;
+        continue;
+      }
+      // intrinsic
+      if (t.kind === "intrinsic") {
+        const resolved = resolveIntrinsic(t.text);
+        if (isIntrinsicName(t.text) && !resolved) {
+          pushDiag({
+            range: t.range,
+            message: `Unknown intrinsic \`${t.text}\` — see docs/DESIGN.md §3.1 for the v1 table.`,
+            severity: "error",
+            code: "m/unknown-intrinsic",
+          });
+        } else if (resolved) {
+          references.push({ name: "$" + resolved, kind: "fn", range: t.range, isDefinition: false });
+        } else if (t.text.startsWith("$$")) {
+          // extrinsic
+          const name = t.text.slice(2);
+          references.push({ name, kind: "fn", range: t.range, isDefinition: false });
+        }
+        idx++;
+        continue;
+      }
+      // global / local refs
+      if (t.kind === "global") {
+        const name = t.text.slice(1);
+        references.push({ name: t.text, kind: "global", range: t.range, isDefinition: false });
+        symbols.push({ name: t.text, kind: "global", range: t.range });
+        idx++;
+        continue;
+      }
+      if (t.kind === "ident") {
+        // local variable or routine ref:  label^routine  is lexed as
+        // ident + global (`^routine` is one token).
+        const next = toks[idx + 1];
+        if (next && next.kind === "global") {
+          // label^routine
+          const routine = next.text.slice(1);
+          references.push({ name: t.text, kind: "label", range: t.range, isDefinition: false });
+          references.push({ name: next.text, kind: "routine", range: next.range, isDefinition: false });
+          symbols.push({ name: next.text, kind: "routine", range: next.range });
+          if (!/^[A-Za-z%][A-Za-z0-9]*$/.test(routine)) {
+            pushDiag({
+              range: next.range,
+              message: `Invalid routine name \`${routine}\`.`,
+              severity: "error",
+              code: "m/invalid-routine",
+            });
+          }
+          idx += 2;
+          continue;
+        }
+        if (!COMMANDS.has(t.text.toUpperCase())) {
+          references.push({ name: t.text, kind: "local", range: t.range, isDefinition: false });
+        }
+        idx++;
+        continue;
+      }
+      idx++;
+    }
+    if (lineHasIf > 0) sawIf += lineHasIf;
+  }
+
+  // IF with no ELSE anywhere is fine; we only flag stray ELSE.
+
+  const hover = (offset: number): HoverInfo | null => {
+    for (const t of tokens) {
+      if (offset < t.range.start || offset >= t.range.end) continue;
+      if (t.kind === "intrinsic") {
+        const resolved = resolveIntrinsic(t.text);
+        if (!resolved) {
+          if (t.text.startsWith("$$")) {
+            return { value: `**extrinsic function** \`${t.text.slice(2)}\`\n\nDefined in a routine; \`goto\` jumps to its label.`, range: t.range };
+          }
+          return { value: `unknown intrinsic \`${t.text}\``, range: t.range };
+        }
+        const info = INTRINSICS[resolved];
+        if (!info) {
+          return { value: `\`${t.text}\` — \`$${resolved}\` (implementation-specific)`, range: t.range };
+        }
+        return {
+          value: `**\`$${resolved}\`${info.args}**\n\n${info.doc}`,
+          range: t.range,
+        };
+      }
+      if (t.kind === "command") {
+        const full = CMD_FULL.get(t.text.toUpperCase()) ?? t.text.toUpperCase();
+        return {
+          value: `**\`${full}\`** command${t.text.length < full.length ? ` (abbreviation \`${t.text}\`)` : ""}`,
+          range: t.range,
+        };
+      }
+      if (t.kind === "global") {
+        return {
+          value: `**global** \`${t.text}\`\n\nSparse multi-dimensional array. \`$DATA\` on a node returns **0/1/10/11**.`,
+          range: t.range,
+        };
+      }
+    }
+    return null;
+  };
+
+  const definitions = (offset: number): Location[] => {
+    for (const t of tokens) {
+      if (offset < t.range.start || offset >= t.range.end) continue;
+      // find name
+      let name: string | null = null;
+      if (t.kind === "intrinsic" && t.text.startsWith("$$")) name = t.text.slice(2);
+      else if (t.kind === "ident") name = t.text;
+      else if (t.kind === "global") name = t.text;
+      if (!name) continue;
+      const hits: Location[] = [];
+      for (const s of symbols) {
+        if (s.name === name || s.name === name.replace(/^\^/, "")) {
+          hits.push({ uri, range: s.range });
+        }
+      }
+      return hits;
+    }
+    return [];
+  };
+
+  return { tokens, symbols, references, diagnostics, hover, definitions };
+}
+
+export const mPlugin: LanguagePlugin = {
+  id: "m",
+  extensions: [".m", ".M", ".mumps"],
+  analyse,
+};
