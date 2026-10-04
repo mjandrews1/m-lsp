@@ -14,6 +14,7 @@ import type {
   SymbolInfo,
   Token,
 } from "../../core/src/index";
+import { blockContext, extrinsicAtLine, fullCommand, quitArgAllowed, splitLines } from "./block";
 
 // ---------------------------------------------------------------- tables
 
@@ -246,31 +247,10 @@ export function analyse(uri: string, text: string): Analysis {
   const symbols: SymbolInfo[] = [];
   const references: Reference[] = [];
 
-  // Split into lines for IF/ELSE and command structure.
-  interface Line {
-    start: number;
-    end: number;
-    tokens: Token[]; // non-ws
-  }
-  const lines: Line[] = [];
-  {
-    let cur: Token[] = [];
-    let lineStart = 0;
-    for (const t of tokens) {
-      if (t.kind === "whitespace" && t.text.includes("\n")) {
-        // break on first newline inside
-        const parts = t.text.split("\n");
-        if (cur.length || true) {
-          lines.push({ start: lineStart, end: t.range.start, tokens: cur });
-          cur = [];
-          lineStart = t.range.end;
-        }
-        continue;
-      }
-      if (t.kind !== "whitespace") cur.push(t);
-    }
-    lines.push({ start: lineStart, end: text.length, tokens: cur });
-  }
+  // Split into lines for IF/ELSE, command structure, and DO/FOR blocks.
+  const lines = splitLines(text, tokens);
+  const { stackAtLine, framesOpenedOnLine } = blockContext(lines);
+  const inExtrinsic = extrinsicAtLine(lines);
 
   // Label at start of line:  LABEL  or  LABEL(args)  or  label^routine
   for (const line of lines) {
@@ -307,7 +287,8 @@ export function analyse(uri: string, text: string): Analysis {
 
   const pushDiag = (d: Diagnostic) => diagnostics.push(d);
 
-  for (const line of lines) {
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    const line = lines[lineIdx];
     lineHasIf = 0;
     const toks = line.tokens;
     let idx = 0;
@@ -356,19 +337,19 @@ export function analyse(uri: string, text: string): Analysis {
           }
         }
         if (full === "QUIT") {
-          // QUIT with argument at file scope (no enclosing DO/FOR block marker)
-          // v1 heuristic: QUIT with an expression token right after, on a line
-          // that is not inside a FOR/DO we can see.  We only flag QUIT expr at
-          // the top level of a line whose command is QUIT and which has a
-          // following expression and no ^ or ( block context.
+          // Dotted stack at line start + FOR/DO frames opened earlier on this line.
+          const stack = [
+            ...stackAtLine[lineIdx],
+            ...framesOpenedOnLine[lineIdx].filter((f) => f.openOffset < t.range.start),
+          ];
           const next = toks[idx + 1];
           if (next && (next.kind === "number" || next.kind === "string" ||
             (next.kind === "ident" && !COMMANDS.has(next.text.toUpperCase())) ||
             (next.kind === "intrinsic") || (next.kind === "global") ||
             (next.kind === "operator" && (next.text === "-" || next.text === "+" || next.text === "$" || next.text === "(")))) {
             // argless QUIT is `Q` alone or `Q:` postcond then EOL / next cmd
-            // If next is `:` this is a post-conditional, not an argument.
-            if (!(next.kind === "punct" && next.text === ":")) {
+            const allowed = quitArgAllowed(stack) || inExtrinsic[lineIdx];
+            if (!(next.kind === "punct" && next.text === ":") && !allowed) {
               pushDiag({
                 range: t.range,
                 message: "`QUIT` with an argument is only valid inside a `DO` block or `FOR` body. Argumentless `QUIT` is the top-level form (ISO 8.1.2).",

@@ -95,6 +95,7 @@ publishing diagnostics, capability negotiation. Adding a language is
 | **special variables** | `$H $HOROLOG $T $P $C $R $J $IO $D $O $Q $NA $G $QL $QS $L $E $F $A $Z*` | ✅ hover |
 | **intrinsics** | `$DATA $ORDER $QUERY $NAME $GET $PIECE $EXTRACT $FIND $LENGTH $ASCII $CHAR $RANDOM $HOROLOG $JOB $TEXT $JUSTIFY $REVERSE $TRANSLATE $INCREMENT $FNUMBER $STACK` | ✅ hover + unknown-intrinsic diagnostic |
 | **syntax quirks** | `ELSE` binds last `IF`; `QUIT` arg vs argless; `$T` ambiguity; `FOR` specs; post-cond + argless `DO`/`GOTO` | ✅ as diagnostics / hovers |
+| **DO/FOR block context** | dotted-line depth · argless `DO` opens block · `FOR` body is same-line · `QUIT expr` legal in extrinsic (`label(args)`) or DO/FOR | ✅ `packages/m-core/src/block.ts` (m-lsp#1) |
 | **entry points** | `D`/`DO`, `^routine`, `$$fn()` | ✅ |
 
 **v1 diagnostics (M)** — at least:
