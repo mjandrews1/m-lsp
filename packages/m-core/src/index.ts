@@ -15,6 +15,13 @@ import type {
   Token,
 } from "../../core/src/index";
 import { blockContext, extrinsicAtLine, fullCommand, quitArgAllowed, splitLines } from "./block";
+import {
+  emptyIndirectDiagnostics,
+  forArgListStart,
+  forArgsHover,
+  indirectHover,
+  parseForArgs,
+} from "./forargs";
 
 // ---------------------------------------------------------------- tables
 
@@ -257,7 +264,6 @@ export function analyse(uri: string, text: string): Analysis {
     const first = line.tokens[0];
     if (!first) continue;
     if (first.kind === "ident") {
-      // label^routine at col 0-ish
       const second = line.tokens[1];
       if (second && second.kind === "operator" && second.text === "^") {
         // not a label — this is a routine-ref expression
@@ -265,14 +271,9 @@ export function analyse(uri: string, text: string): Analysis {
         symbols.push({ name: first.text, kind: "label", range: first.range });
         references.push({ name: first.text, kind: "label", range: first.range, isDefinition: true });
       } else {
-        // label followed by whitespace then command — token already stripped ws
-        // so a label is an ident that is NOT a known command, or is a command
-        // used as a label (rare).  We treat leading ident before a command-ish
-        // or at EOL as a label.
+        // A leading known command is not a label (`F I=…`, `D FOO`).
         const isCmd = COMMANDS.has(first.text.toUpperCase());
-        const next = line.tokens[1];
-        const nextLooksLikeCmd = next && next.kind === "ident" && COMMANDS.has(next.text.toUpperCase());
-        if (!isCmd || nextLooksLikeCmd) {
+        if (!isCmd) {
           symbols.push({ name: first.text, kind: "label", range: first.range });
           references.push({ name: first.text, kind: "label", range: first.range, isDefinition: true });
         }
@@ -291,23 +292,24 @@ export function analyse(uri: string, text: string): Analysis {
     const line = lines[lineIdx];
     lineHasIf = 0;
     const toks = line.tokens;
+    for (const d of emptyIndirectDiagnostics(toks)) pushDiag(d);
     let idx = 0;
-    // skip label
+    // skip label — but never skip a leading known command (`F I=…`, `D FOO`).
+    // A label is `NAME` or `NAME(args)`; `NAME(args)` wins even if NAME is a
+    // command word (rare entry point).
     if (toks[0] && toks[0].kind === "ident") {
       const second = toks[1];
-      const isLabel =
-        (second && second.kind === "punct" && second.text === "(") ||
-        (second && second.kind === "ident" && COMMANDS.has(second.text.toUpperCase())) ||
-        (!second) ||
-        (second && second.kind === "operator" && second.text !== "^");
-      if (isLabel && !(toks[0].kind === "ident" && COMMANDS.has(toks[0].text.toUpperCase()) && !second)) {
-        // fall through — but if it is clearly a label we already recorded
+      const isFormals = second && second.kind === "punct" && second.text === "(";
+      const firstIsCmd = COMMANDS.has(toks[0].text.toUpperCase());
+      if (isFormals || !firstIsCmd) {
         const looksLabel =
+          isFormals ||
+          !second ||
           (second && second.kind === "ident" && COMMANDS.has(second.text.toUpperCase())) ||
-          (second && second.kind === "punct" && second.text === "(") ||
-          !second;
-        if (looksLabel && !COMMANDS.has(toks[0].text.toUpperCase())) idx = 1;
-        else if (looksLabel && COMMANDS.has(toks[0].text.toUpperCase()) && second && second.kind === "ident") idx = 1;
+          (second && second.kind === "operator" && second.text !== "^");
+        if (looksLabel && !(second && second.kind === "operator" && second.text === "^")) {
+          idx = 1;
+        }
       }
     }
 
@@ -322,6 +324,25 @@ export function analyse(uri: string, text: string): Analysis {
         references.push({ name: full, kind: "label", range: t.range, isDefinition: false });
 
         if (full === "IF") lineHasIf++;
+        if (full === "FOR") {
+          const argStart = forArgListStart(toks, idx);
+          const info = parseForArgs(toks, argStart, t.range.end);
+          if (info && info.raw && !info.variable && !info.bareSpec && info.hasColonSpec) {
+            pushDiag({
+              range: info.range,
+              message: "`FOR` argument list looks malformed — expected `var=from[:inc:to[:cmd]]`, `var=a,b,c`, `0:0`, or argumentless `FOR`.",
+              severity: "warning",
+              code: "m/for-args",
+            });
+          } else if (info && info.raw && !info.variable && !info.bareSpec) {
+            pushDiag({
+              range: info.range,
+              message: "`FOR` argument list has no `var=` — expected `var=…`, `0:0`, or argumentless `FOR`.",
+              severity: "warning",
+              code: "m/for-args",
+            });
+          }
+        }
         if (full === "ELSE") {
           if (lineHasIf === 0 && sawIf === 0) {
             pushDiag({
@@ -476,10 +497,21 @@ export function analyse(uri: string, text: string): Analysis {
       }
       if (t.kind === "command") {
         const full = CMD_FULL.get(t.text.toUpperCase()) ?? t.text.toUpperCase();
-        return {
-          value: `**\`${full}\`** command${t.text.length < full.length ? ` (abbreviation \`${t.text}\`)` : ""}`,
-          range: t.range,
-        };
+        const base = `**\`${full}\`** command${t.text.length < full.length ? ` (abbreviation \`${t.text}\`)` : ""}`;
+        if (full === "FOR") {
+          const line = lines.find((ln) => offset >= ln.start && offset < ln.end);
+          if (line) {
+            const li = line.tokens.findIndex((x) => x.range.start === t.range.start);
+            if (li >= 0) {
+              const info = parseForArgs(line.tokens, forArgListStart(line.tokens, li), t.range.end);
+              if (info) return { value: forArgsHover(info), range: t.range };
+            }
+          }
+        }
+        return { value: base, range: t.range };
+      }
+      if (t.kind === "operator" && t.text === "@") {
+        return indirectHover(t);
       }
       if (t.kind === "global") {
         return {
