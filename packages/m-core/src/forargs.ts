@@ -1,30 +1,43 @@
 /**
- * FOR argument lists and indirection `@` (m-lsp#2).
+ * FOR argument lists and indirection `@` (m-lsp#2 / m-lsp#3).
  *
  * ISO FOR argument forms:
  *   F  rest                 argumentless (body = rest of line)
  *   F i=1,2,3               exclusive list
+ *   F i=from                exclusive list (single value)
+ *   F i=1:2                 from:increment (to omitted)
  *   F i=1:1:10              from:inc:to
  *   F i=1:1:10:cmds         from:inc:to:command
+ *   F i=1,2,3:cmds          exclusive list + command
  *   F 0:0 rest              argumented forever (no var)
+ *   F 0:0:cmds              forever + command
+ *
+ * m-lsp#3: raw text preserves spaces; `$fn(...)` / `(…)` stay in the
+ * `from` expression; `:cmds` is only after a list or a full `from:inc:to`
+ * (not after a single `from:` or `from:inc` — those leave the rest of the
+ * line as the FOR *body*).
  */
 import type { Diagnostic, HoverInfo, Token } from "../../core/src/index";
 import { fullCommand } from "./block";
 
 export interface ForArgInfo {
-  /** variable name, or null for `0:0` */
+  /** variable name, or null for `0:0` / malformed */
   variable: string | null;
-  /** raw argument-list text (tokens between FOR and first command atom) */
+  /** argument-list text as written (spaces preserved when `text` is given) */
   raw: string;
-  hasColonSpec: boolean;
+  /** `:` count inside the var/bare spec, excluding a trailing `:cmds` */
+  specColons: number;
+  /** comma-separated exclusive list */
+  hasList: boolean;
   hasCommandInArgs: boolean;
   /** true for `0:0` style (no var=) */
   bareSpec: boolean;
+  /** spec missing a piece (e.g. `1:1:`) */
+  incomplete: boolean;
   range: { start: number; end: number };
 }
 
 function isCommandTok(t: Token | undefined): boolean {
-  // after analyse() walks the line, command tokens are kind "command"
   return (
     !!t &&
     (t.kind === "ident" || t.kind === "command") &&
@@ -32,106 +45,198 @@ function isCommandTok(t: Token | undefined): boolean {
   );
 }
 
+function isExprStart(t: Token | undefined): boolean {
+  return (
+    !!t &&
+    (t.kind === "number" || t.kind === "ident" || t.kind === "intrinsic" ||
+      t.kind === "string" || t.kind === "global" ||
+      (t.kind === "punct" && (t.text === "(" || t.text === "-")))
+  );
+}
+
+function isWs(t: Token | undefined): boolean {
+  return !!t && t.kind === "whitespace";
+}
+
+function nextTok(toks: Token[], i: number): number {
+  while (i < toks.length && isWs(toks[i])) i++;
+  return i;
+}
+
+/** Consume one FROM/expression: numbers, idents, `$f(…)`, `(…)`, `^g`, strings. */
+function readExprTokens(toks: Token[], i: number): number {
+  let depth = 0;
+  i = nextTok(toks, i);
+  while (i < toks.length && toks[i].kind !== "comment") {
+    const t = toks[i];
+    if (isWs(t)) {
+      i++;
+      continue;
+    }
+    if (t.kind === "punct") {
+      if (t.text === "(") depth++;
+      else if (t.text === ")") {
+        if (depth === 0) return i;
+        depth--;
+      } else if (t.text === "," && depth === 0) return i;
+      else if (t.text === ":" && depth === 0) return i;
+      i++;
+      continue;
+    }
+    if (depth === 0 && t.kind === "operator" && t.text !== "^" && t.text !== "'") {
+      i++;
+      continue;
+    }
+    if (depth === 0 && isCommandTok(t) && !isExprStart(t)) return i;
+    i++;
+    i = nextTok(toks, i);
+  }
+  return i;
+}
+
 /** Token after `FOR`[`:pc`] is where the argument list starts. */
 export function forArgListStart(toks: Token[], forIdx: number): number {
-  let i = forIdx + 1;
+  let i = nextTok(toks, forIdx + 1);
   if (toks[i]?.kind === "punct" && toks[i].text === ":") {
-    i++;
-    while (i < toks.length && !isCommandTok(toks[i]) && toks[i].kind !== "comment") i++;
+    i = nextTok(toks, i + 1);
+    while (i < toks.length && !isCommandTok(toks[i]) && toks[i].kind !== "comment") {
+      i = nextTok(toks, i + 1);
+    }
   }
   return i;
 }
 
 /**
  * Parse a FOR argument list starting at `start`.
- * Stops at the first command atom that is not clearly part of `var=…:cmd`.
+ * `text` (optional) is the source line so `raw` keeps original spacing.
  */
-export function parseForArgs(toks: Token[], start: number, forEnd: number): ForArgInfo | null {
-  let i = start;
+export function parseForArgs(
+  toks: Token[],
+  start: number,
+  forEnd: number,
+  text?: string,
+): ForArgInfo | null {
+  let i = nextTok(toks, start);
   if (i >= toks.length || toks[i].kind === "comment") return null;
 
-  // argumentless FOR: next token is a command (or empty / comment).
-  // `F I=…` / `F D=…` — variable names that collide with command
-  // abbreviations are variables when followed by `=`.
-  // (After analyse(), those abbreviations may already be kind "command".)
+  const t0 = toks[i];
+  const t1 = toks[nextTok(toks, i + 1)];
   const nextIsVar =
-    !!toks[i] &&
-    (toks[i].kind === "ident" || toks[i].kind === "command") &&
-    toks[i + 1]?.kind === "operator" &&
-    toks[i + 1].text === "=";
+    !!t0 &&
+    (t0.kind === "ident" || t0.kind === "command") &&
+    t1?.kind === "operator" &&
+    t1.text === "=";
   if (!nextIsVar && (i >= toks.length || toks[i].kind === "comment" || isCommandTok(toks[i]))) {
     return {
       variable: null,
       raw: "",
-      hasColonSpec: false,
+      specColons: 0,
+      hasList: false,
       hasCommandInArgs: false,
       bareSpec: false,
+      incomplete: false,
       range: { start: forEnd, end: forEnd },
     };
   }
 
   const argStart = toks[i].range.start;
   let variable: string | null = null;
-  let hasColon = false;
+  let hasList = false;
   let hasCommandInArgs = false;
   let bareSpec = false;
+  let incomplete = false;
+  let specColons = 0;
 
-  // `0:0` — exactly 0 then colon (no var=)
+  // `0:0` forever form
   if (
     toks[i].kind === "number" &&
     toks[i].text === "0" &&
-    toks[i + 1]?.kind === "punct" &&
-    toks[i + 1].text === ":"
+    toks[nextTok(toks, i + 1)]?.kind === "punct" &&
+    toks[nextTok(toks, i + 1)]?.text === ":"
   ) {
     bareSpec = true;
-    hasColon = true;
-    i += 2;
-  } else if (
-    (toks[i].kind === "ident" || toks[i].kind === "command") &&
-    toks[i + 1]?.kind === "operator" &&
-    toks[i + 1].text === "="
-  ) {
-    // `F I=…` — `I` is a variable even though `I` is also IF
+    specColons = 1;
+    i = nextTok(toks, i + 1) + 1;
+    i = nextTok(toks, i);
+    if (i < toks.length && toks[i].kind === "number") i = nextTok(toks, i + 1);
+  } else if (nextIsVar) {
     variable = toks[i].text;
-    i += 2;
-    if (toks[i]?.kind === "punct" && toks[i].text === ":") hasColon = true;
+    i = nextTok(toks, i + 2);
+    i = readExprTokens(toks, i);
+    i = nextTok(toks, i);
+    while (i < toks.length && toks[i].kind === "punct" && toks[i].text === ",") {
+      hasList = true;
+      i = readExprTokens(toks, nextTok(toks, i + 1));
+      i = nextTok(toks, i);
+    }
   } else {
-    // not argumentless, not var=, not 0:0 → malformed
+    // malformed
   }
 
-  // consume argument tokens until we hit a command that starts the body
-  // (unless we are inside `:command` after a 3-colon spec)
-  let colons = 0;
-  while (i < toks.length && toks[i].kind !== "comment") {
-    const t = toks[i];
-    if (isCommandTok(t) && !(hasColon && colons >= 3 && hasCommandInArgs)) {
-      // after `var=from:inc:to` a further `:cmd` may start with a command name
-      // that is actually the FOR command-argument; detect `:` just before
-      const prev = toks[i - 1];
-      const afterColon =
-        prev?.kind === "punct" && prev.text === ":";
-      if (afterColon && hasColon) {
-        hasCommandInArgs = true;
-        i++;
-        continue;
-      }
+  // colon tail (:inc/:to/:cmds) — runs for var= and 0:0
+  while (i < toks.length && toks[i].kind === "punct" && toks[i].text === ":") {
+    i = nextTok(toks, i + 1);
+    const atEnd =
+      i >= toks.length ||
+      toks[i].kind === "comment" ||
+      (toks[i].kind === "punct" && (toks[i].text === ":" || toks[i].text === ","));
+    if (atEnd && !hasList) {
+      incomplete = true;
+      specColons++;
+      continue;
+    }
+    if (isCommandTok(toks[i]) && (hasList || bareSpec || specColons >= 2)) {
+      hasCommandInArgs = true;
+      i = toks.length;
       break;
     }
-    if (t.kind === "punct" && t.text === ":") {
-      hasColon = true;
-      colons++;
+    // `F I=1: S body` — one colon then a command is the FOR *body*, not `:cmds`
+    if (isCommandTok(toks[i]) && !hasList && !bareSpec && specColons < 2) {
+      break;
     }
-    i++;
+    if (hasList) {
+      hasCommandInArgs = true;
+      i = toks.length;
+      break;
+    }
+    specColons++;
+    i = readExprTokens(toks, i);
+    i = nextTok(toks, i);
+    if (specColons > 3) {
+      hasCommandInArgs = true;
+      i = toks.length;
+      break;
+    }
   }
 
-  const argEnd = i > start ? toks[i - 1].range.end : forEnd;
+  if (!hasCommandInArgs) {
+    while (i < toks.length && toks[i].kind !== "comment") {
+      if (!isWs(toks[i]) && isCommandTok(toks[i])) break;
+      i++;
+    }
+  }
+
+  let end = i > 0 ? toks[Math.min(i, toks.length) - 1].range.end : forEnd;
+  // trim trailing whitespace from the raw span
+  if (text != null) {
+    while (end > argStart && /\s/.test(text[end - 1] ?? "")) end--;
+  }
+  const rawStart = argStart;
+  const rawEnd = Math.max(end, argStart);
+  const raw =
+    text != null
+      ? text.slice(rawStart, rawEnd)
+      : toks.slice(start, i).map((t) => t.text).join("");
+
   return {
     variable,
-    raw: toks.slice(start, i).map((t) => t.text).join(""),
-    hasColonSpec: hasColon,
+    raw,
+    specColons,
+    hasList,
     hasCommandInArgs,
     bareSpec,
-    range: { start: argStart, end: argEnd },
+    incomplete,
+    range: { start: rawStart, end: rawEnd },
   };
 }
 
@@ -166,17 +271,38 @@ export function indirectHover(t: Token): HoverInfo {
   };
 }
 
+function specShape(info: ForArgInfo): string {
+  if (info.bareSpec) {
+    return info.hasCommandInArgs
+      ? "`0:0` + trailing command in the argument list"
+      : "`0:0` — argumented forever form";
+  }
+  const v = info.variable ?? "?";
+  if (info.hasList) {
+    return info.hasCommandInArgs
+      ? `exclusive list \`${v}=from,from,…\` with trailing command`
+      : `exclusive list \`${v}=from,from,…\``;
+  }
+  if (info.specColons === 0) {
+    return `\`${v}=from\``;
+  }
+  if (info.specColons === 1) {
+    return `\`${v}=from:increment\`${info.incomplete ? " (incomplete)" : ""}`;
+  }
+  if (info.specColons >= 2) {
+    const base = `\`${v}=from:increment:to\`${info.incomplete ? " (incomplete)" : ""}`;
+    return info.hasCommandInArgs ? `${base} with trailing command` : base;
+  }
+  return `\`${v}=…\``;
+}
+
 export function forArgsHover(info: ForArgInfo): string {
   if (!info.raw) {
     return "**`FOR`** — argumentless; commands on this line repeat until `QUIT`.";
   }
-  if (info.bareSpec) {
-    return "**`FOR 0:0`** — argumented forever form; body repeats until `QUIT`.";
-  }
-  const v = info.variable ?? "?";
-  if (info.hasColonSpec) {
-    const tail = info.hasCommandInArgs ? " with trailing command in the argument list" : "";
-    return `**\`FOR ${info.raw}\`**\n\n\`${v}=from:increment:to\`${tail}. Body is the rest of this line.`;
-  }
-  return `**\`FOR ${info.raw}\`**\n\nExclusive list for \`${v}\`. Body is the rest of this line.`;
+  const shape = specShape(info);
+  const body = info.hasCommandInArgs
+    ? "Command lives in the argument list; the rest of this line follows it."
+    : "Body is the rest of this line.";
+  return `**\`FOR ${info.raw.trim()}\`**\n\n${shape}. ${body}`;
 }

@@ -48,12 +48,77 @@ describe("FOR argument lists (m-lsp#2)", () => {
   });
 
   test("parseForArgs shapes", () => {
-    const toks = tokenize("F I=1:1:10:W I").filter((t) => t.kind !== "whitespace");
+    const src = "F I=1:1:10:W I";
+    const toks = tokenize(src);
     const start = forArgListStart(toks, 0);
-    const info = parseForArgs(toks, start, toks[0].range.end);
+    const info = parseForArgs(toks, start, toks[0].range.end, src);
     expect(info?.variable).toBe("I");
-    expect(info?.hasColonSpec).toBe(true);
+    expect(info?.specColons).toBe(2);
     expect(info?.hasCommandInArgs).toBe(true);
+  });
+});
+
+describe("FOR hover edge cases (m-lsp#3)", () => {
+  const infoFor = (text: string) => {
+    const toks = tokenize(text);
+    const start = forArgListStart(toks, 0);
+    return parseForArgs(toks, start, toks[0].range.end, text);
+  };
+  const hover0 = (text: string) => analyse("file:///t.m", text).hover(0);
+
+  test("raw preserves spaces (m-lsp#3 #1)", () => {
+    expect(infoFor("F I=1:1:10:W I")?.raw).toBe("I=1:1:10:W I");
+    expect(infoFor("F I=1:1:10:S J=I+1 W J")?.raw).toContain("S J=I+1 W J");
+  });
+
+  test("from expression keeps $O(X(I)) (m-lsp#3 #2)", () => {
+    const info = infoFor("F I=$O(X(I)):1:5 W I");
+    expect(info?.variable).toBe("I");
+    expect(info?.raw).toContain("$O(X(I))");
+    expect(info?.specColons).toBe(2);
+    expect(info?.hasCommandInArgs).toBe(false);
+    expect(hover0("F I=$O(X(I)):1:5 W I")?.value).toContain("from:increment:to");
+  });
+
+  test("2-colon form is from:increment (m-lsp#3 #3)", () => {
+    const info = infoFor("F I=1:2 W I");
+    expect(info?.specColons).toBe(1);
+    expect(hover0("F I=1:2 W I")?.value).toContain("from:increment");
+    expect(hover0("F I=1:2 W I")?.value).not.toContain("from:increment:to");
+  });
+
+  test("F I=1: S X=I — body, not :cmds (m-lsp#3 #4)", () => {
+    const info = infoFor("F I=1: S X=I");
+    expect(info?.hasCommandInArgs).toBe(false);
+    expect(info?.raw).toBe("I=1:");
+    expect(hover0("F I=1: S X=I")?.value).toContain("`I=from`");
+  });
+
+  test("exclusive list + :cmds (m-lsp#3 #5)", () => {
+    const info = infoFor("F I=1,2,3:W I");
+    expect(info?.hasList).toBe(true);
+    expect(info?.hasCommandInArgs).toBe(true);
+    expect(hover0("F I=1,2,3:W I")?.value).toContain("exclusive list");
+  });
+
+  test("0:0 with :cmds shows tail (m-lsp#3 #6)", () => {
+    const info = infoFor("F 0:0:W 1");
+    expect(info?.bareSpec).toBe(true);
+    expect(info?.hasCommandInArgs).toBe(true);
+    expect(hover0("F 0:0:W 1")?.value).toContain("0:0");
+    expect(hover0("F 0:0:W 1")?.value).toContain("trailing command");
+  });
+
+  test("incomplete to (m-lsp#3 #8)", () => {
+    const info = infoFor("F I=1:1:");
+    expect(info?.incomplete).toBe(true);
+    expect(hover0("F I=1:1:")?.value).toContain("incomplete");
+  });
+
+  test("full from:inc:to:cmds still works (m-lsp#2)", () => {
+    const info = infoFor("F I=1:1:10:W I");
+    expect(info?.hasCommandInArgs).toBe(true);
+    expect(hover0("F I=1:1:10:W I")?.value).toContain("trailing command");
   });
 });
 

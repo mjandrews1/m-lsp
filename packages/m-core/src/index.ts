@@ -326,7 +326,7 @@ export function analyse(uri: string, text: string): Analysis {
         if (full === "IF") lineHasIf++;
         if (full === "FOR") {
           const argStart = forArgListStart(toks, idx);
-          const info = parseForArgs(toks, argStart, t.range.end);
+          const info = parseForArgs(toks, argStart, t.range.end, text);
           if (info && info.raw && !info.variable && !info.bareSpec && info.hasColonSpec) {
             pushDiag({
               range: info.range,
@@ -503,7 +503,7 @@ export function analyse(uri: string, text: string): Analysis {
           if (line) {
             const li = line.tokens.findIndex((x) => x.range.start === t.range.start);
             if (li >= 0) {
-              const info = parseForArgs(line.tokens, forArgListStart(line.tokens, li), t.range.end);
+              const info = parseForArgs(line.tokens, forArgListStart(line.tokens, li), t.range.end, text);
               if (info) return { value: forArgsHover(info), range: t.range };
             }
           }
