@@ -396,9 +396,12 @@ export function analyse(uri: string, text: string): Analysis {
           const head = raw.trim()[0] ?? "";
           // Number-leading spec (`F 1:1:3`) is malformed; ident-leading
           // without `=` is argumentless FOR + body (ZGETPAGE / CS).
-          const numberSpec = /^[0-9.+-]/.test(raw.trim());
+          const trimmed = raw.trim();
+          // `F .` / `F .cmd` — argumentless FOR + dotted body (legal)
+          const dottedFor = trimmed === "." || /^\.\s*\S/.test(trimmed);
+          const numberSpec = /^[0-9.+-]/.test(trimmed) && !dottedFor;
           if (info && raw.trim() && !info.variable && !info.bareSpec && !info.hasList
-              && (hasEq || numberSpec)) {
+              && !dottedFor && (hasEq || numberSpec)) {
             pushDiag({
               range: info.range,
               message: "`FOR` argument list looks malformed — expected `var=from[:inc:to[:cmd]]`, `var=a,b,c`, `0:0`, or argumentless `FOR`.",
@@ -519,11 +522,17 @@ export function analyse(uri: string, text: string): Analysis {
           references.push({ name: t.text, kind: "label", range: t.range, isDefinition: false });
           references.push({ name: next.text, kind: "routine", range: next.range, isDefinition: false });
           symbols.push({ name: next.text, kind: "routine", range: next.range });
-          if (!/^[A-Za-z%][A-Za-z0-9]*$/.test(routine)) {
+          // `$T(@T^@R)`, `G @("A^"_DNM)`, `^(0)`, `^UTILITY(…)` — indirection
+          // and naked globals are not routine names.
+          // `^(0)` / `^UTILITY(…)` / `$T(@T^@R)` are not routine names;
+          // `FOO^` (empty name) still is invalid.
+          const naked = routine.startsWith("(");
+          const indirect = routine.includes("@") || (idx >= 1 && toks[idx-1]?.text === "@");
+          if (!naked && !indirect && !/^[A-Za-z%][A-Za-z0-9]*$/.test(routine)) {
             pushDiag({
               range: next.range,
               message: `Invalid routine name \`${routine}\`.`,
-              severity: "error",
+              severity: "warning",
               code: "m/invalid-routine",
             });
           }
