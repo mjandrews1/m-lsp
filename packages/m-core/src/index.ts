@@ -351,25 +351,22 @@ export function analyse(uri: string, text: string): Analysis {
           const argStart = forArgListStart(toks, idx);
           const info = parseForArgs(toks, argStart, t.range.end, text);
           // Exclusive list (`F I=1,2,3`), `0:0`, and argumentless FOR are legal.
-          const rawHead = info?.raw?.trim()?.[0] ?? "";
-          const looksLikeSpec = /[@%A-Za-z0-9(]/.test(rawHead);
-          if (info && info.raw && !info.variable && !info.bareSpec && !info.hasList
-              && looksLikeSpec && info.raw.trim().length > 0) {
-            if (info.specColons > 0) {
-              pushDiag({
-                range: info.range,
-                message: "`FOR` argument list looks malformed — expected `var=from[:inc:to[:cmd]]`, `var=a,b,c`, `0:0`, or argumentless `FOR`.",
-                severity: "warning",
-                code: "m/for-args",
-              });
-            } else {
-              pushDiag({
-                range: info.range,
-                message: "`FOR` argument list has no `var=` — expected `var=…`, `0:0`, or argumentless `FOR`.",
-                severity: "information",
-                code: "m/for-args",
-              });
-            }
+          // `F  CMD args` is argumentless FOR + body (legal).
+          // Only flag a *spec* that has `=` but failed to parse as `var=…`.
+          const raw = info?.raw ?? "";
+          const hasEq = /=/.test(raw);
+          const head = raw.trim()[0] ?? "";
+          // Number-leading spec (`F 1:1:3`) is malformed; ident-leading
+          // without `=` is argumentless FOR + body (ZGETPAGE / CS).
+          const numberSpec = /^[0-9.+-]/.test(raw.trim());
+          if (info && raw.trim() && !info.variable && !info.bareSpec && !info.hasList
+              && (hasEq || numberSpec)) {
+            pushDiag({
+              range: info.range,
+              message: "`FOR` argument list looks malformed — expected `var=from[:inc:to[:cmd]]`, `var=a,b,c`, `0:0`, or argumentless `FOR`.",
+              severity: "warning",
+              code: "m/for-args",
+            });
           }
           }
         }
