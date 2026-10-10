@@ -524,11 +524,16 @@ export function analyse(uri: string, text: string): Analysis {
           symbols.push({ name: next.text, kind: "routine", range: next.range });
           // `$T(@T^@R)`, `G @("A^"_DNM)`, `^(0)`, `^UTILITY(…)` — indirection
           // and naked globals are not routine names.
-          // `^(0)` / `^UTILITY(…)` / `$T(@T^@R)` are not routine names;
-          // `FOO^` (empty name) still is invalid.
-          const naked = routine.startsWith("(");
+          // Bare `^` + `(` / `@` is a naked global or indirection, not a routine:
+          //   `^(0)`, `S:DIPZLR(DM)\'=DRN ^(DIPZL(DM))`, `$T(+2^@RTN)`, `$T(@T^@R)`.
+          const afterGlobal = toks[idx + 2];
+          const nakedGlobal = routine === "" &&
+            !!afterGlobal && afterGlobal.kind === "punct" && afterGlobal.text === "(";
+          const atFollows = routine === "" &&
+            (routine.includes("@") || (afterGlobal?.text === "@") ||
+             (idx + 2 < toks.length && toks.slice(idx + 2).some(tk => tk.text === "@" && tk.kind === "operator")));
           const indirect = routine.includes("@") || (idx >= 1 && toks[idx-1]?.text === "@");
-          if (!naked && !indirect && !/^[A-Za-z%][A-Za-z0-9]*$/.test(routine)) {
+          if (!nakedGlobal && !atFollows && !indirect && !/^[A-Za-z%][A-Za-z0-9]*$/.test(routine)) {
             pushDiag({
               range: next.range,
               message: `Invalid routine name \`${routine}\`.`,
