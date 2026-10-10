@@ -450,10 +450,11 @@ export function analyse(uri: string, text: string): Analysis {
         if (toks[idx] && toks[idx].kind === "punct" && toks[idx].text === ":") {
           const colon = toks[idx];
           const exprStart = toks[idx + 1];
-          const isExpr = exprStart &&
-            !(exprStart.kind === "ident" && COMMANDS.has(exprStart.text.toUpperCase())) &&
-            !(exprStart.kind === "punct" && exprStart.text === "!") &&
-            exprStart.kind !== "comment";
+          // ISO 7.1.3: postcond is always an expression when a token follows.
+          // `!` is $TEST; command words (X, I, Q, L, …) are valid *variable*
+          // names in expressions (`Q:X=2`, `S:X="@"`). Only `:` / `:;comment`
+          // is empty.
+          const isExpr = !!exprStart && exprStart.kind !== "comment";
           if (!isExpr) {
             pushDiag({
               range: colon.range,
