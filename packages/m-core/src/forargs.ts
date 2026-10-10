@@ -120,12 +120,26 @@ export function parseForArgs(
   if (i >= toks.length || toks[i].kind === "comment") return null;
 
   const t0 = toks[i];
-  const t1 = toks[nextTok(toks, i + 1)];
-  const nextIsVar =
-    !!t0 &&
-    (t0.kind === "ident" || t0.kind === "command") &&
-    t1?.kind === "operator" &&
-    t1.text === "=";
+  // `F var=…` or `F var(sub)=…` (subscripted FOR variable)
+  let nextIsVar = false;
+  if (t0 && (t0.kind === "ident" || t0.kind === "command")) {
+    let j = nextTok(toks, i + 1);
+    if (toks[j]?.kind === "punct" && toks[j].text === "(") {
+      let depth = 0;
+      while (j < toks.length) {
+        const tk = toks[j];
+        if (tk.kind === "punct" && tk.text === "(") depth++;
+        else if (tk.kind === "punct" && tk.text === ")") {
+          depth--;
+          if (depth === 0) { j = nextTok(toks, j + 1); break; }
+        }
+        j++;
+      }
+    } else {
+      j = nextTok(toks, i + 1);
+    }
+    nextIsVar = toks[j]?.kind === "operator" && toks[j].text === "=";
+  }
   // Not a FOR spec: junk heads from other commands' continuation (C65-style)
   const junkHead =
     !!t0 &&

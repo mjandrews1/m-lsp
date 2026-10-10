@@ -344,6 +344,10 @@ export function analyse(uri: string, text: string): Analysis {
 
         if (full === "IF") lineHasIf++;
         if (full === "FOR") {
+          // `F(` is a variable named F, not FOR (FileMan DIFROM/XUPC991)
+          const after = toks[idx + 1];
+          const fParen = !!after && after.kind === "punct" && after.text === "(";
+          if (!fParen) {
           const argStart = forArgListStart(toks, idx);
           const info = parseForArgs(toks, argStart, t.range.end, text);
           // Exclusive list (`F I=1,2,3`), `0:0`, and argumentless FOR are legal.
@@ -366,6 +370,7 @@ export function analyse(uri: string, text: string): Analysis {
                 code: "m/for-args",
               });
             }
+          }
           }
         }
         if (full === "ELSE") {
