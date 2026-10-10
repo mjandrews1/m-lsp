@@ -100,6 +100,7 @@ export const INTRINSICS: Record<string, { args: string; doc: string }> = {
 
 /** Abbreviation → intrinsic full name (unambiguous only). */
 export const INTR_ABBR_PUBLIC: Record<string, string> = {
+  ES: "STACK",
   A: "ASCII", C: "CHAR", D: "DATA", E: "EXTRACT", F: "FIND", FN: "FNUMBER",
   G: "GET", I: "INCREMENT", J: "J", L: "LENGTH", N: "NAME", NA: "NAME",
   O: "ORDER", P: "PIECE", Q: "QUERY", QL: "QLENGTH", QS: "QSUBSCRIPT",
@@ -126,6 +127,22 @@ export const SPECIALS: Record<string, string> = {
   TRESTART: "**0** outside a transaction (rsm#15).",
   X: "`$X` — cursor column.",
   Y: "`$Y` — cursor row.",
+  ECODE: "`$ECODE` — error code string (empty when no error).",
+  ETRAP: "`$ETRAP` — error-trap command string.",
+  ZTRAP: "`$ZTRAP` — Z error-trap string (implementation-specific).",
+  ZEOF: "`$ZEOF` — end-of-file flag on the current device.",
+  ZVERSION: "Implementation version string.",
+  ZJOB: "Job number (impl-specific).",
+  ZLEVEL: "Stack level (impl-specific).",
+  ZSYSTEM: "System id string.",
+  DEVICE: "Current device name (impl-specific).",
+  KEY: "Key of the last READ.",
+  REFERENCE: "Last global reference (naked path).",
+  ESTACK: "Error stack depth.",
+  STORAGE: "Storage available (impl-specific).",
+  SYSTEM: "System string.",
+  PRINCIPAL: "Principal device.",
+  IO: "Current device.",
 };
 
 // ---------------------------------------------------------------- lexer
@@ -239,6 +256,8 @@ function resolveIntrinsic(raw: string): string | null {
   const name = raw.slice(1).toUpperCase();
   if (INTRINSICS[name]) return name;
   if (INTR_ABBR_PUBLIC[name] && INTRINSICS[INTR_ABBR_PUBLIC[name]]) return INTR_ABBR_PUBLIC[name];
+  // Special variables are valid `S $X=…` / `W $Y` forms (M8 / W8)
+  if (SPECIALS[name]) return name;
   // $Z* family — treat as known specials
   if (name.startsWith("Z")) return name;
   return null;
@@ -327,20 +346,26 @@ export function analyse(uri: string, text: string): Analysis {
         if (full === "FOR") {
           const argStart = forArgListStart(toks, idx);
           const info = parseForArgs(toks, argStart, t.range.end, text);
-          if (info && info.raw && !info.variable && !info.bareSpec && info.hasColonSpec) {
-            pushDiag({
-              range: info.range,
-              message: "`FOR` argument list looks malformed — expected `var=from[:inc:to[:cmd]]`, `var=a,b,c`, `0:0`, or argumentless `FOR`.",
-              severity: "warning",
-              code: "m/for-args",
-            });
-          } else if (info && info.raw && !info.variable && !info.bareSpec) {
-            pushDiag({
-              range: info.range,
-              message: "`FOR` argument list has no `var=` — expected `var=…`, `0:0`, or argumentless `FOR`.",
-              severity: "warning",
-              code: "m/for-args",
-            });
+          // Exclusive list (`F I=1,2,3`), `0:0`, and argumentless FOR are legal.
+          const rawHead = info?.raw?.trim()?.[0] ?? "";
+          const looksLikeSpec = /[@%A-Za-z0-9(]/.test(rawHead);
+          if (info && info.raw && !info.variable && !info.bareSpec && !info.hasList
+              && looksLikeSpec && info.raw.trim().length > 0) {
+            if (info.specColons > 0) {
+              pushDiag({
+                range: info.range,
+                message: "`FOR` argument list looks malformed — expected `var=from[:inc:to[:cmd]]`, `var=a,b,c`, `0:0`, or argumentless `FOR`.",
+                severity: "warning",
+                code: "m/for-args",
+              });
+            } else {
+              pushDiag({
+                range: info.range,
+                message: "`FOR` argument list has no `var=` — expected `var=…`, `0:0`, or argumentless `FOR`.",
+                severity: "information",
+                code: "m/for-args",
+              });
+            }
           }
         }
         if (full === "ELSE") {
@@ -397,6 +422,8 @@ export function analyse(uri: string, text: string): Analysis {
               code: "m/empty-postcond",
             });
           } else {
+            // severity-split: valid ISO postcond is INFORMATION only;
+            // empty `:` is m/empty-postcond (error). Never mix the two.
             pushDiag({
               range: { start: colon.range.start, end: exprStart.range.end },
               message: "Post-conditional — the command runs only when this expression is true (ISO 7.1.3).",
@@ -635,5 +662,5 @@ export const mPlugin: LanguagePlugin = {
   analyse,
 };
 
-export { lintOnlyDiagnostics, LINT_CODES, DEPRECATED_INTRINSICS } from "./lint";
+export { lintOnlyDiagnostics, LINT_CODES, INFO_CODES, DEPRECATED_INTRINSICS } from "./lint";
 export type { LintOptions } from "./lint";

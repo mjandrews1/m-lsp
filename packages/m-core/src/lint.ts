@@ -231,3 +231,9 @@ export const LINT_CODES = [
   "m/long-line",
   "m/trailing-whitespace",
 ] as const;
+
+/** Informational codes (severity-split from error/warning lints). */
+export const INFO_CODES = [
+  "m/postcond",
+  "m/for-args",
+] as const;

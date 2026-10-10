@@ -126,6 +126,24 @@ export function parseForArgs(
     (t0.kind === "ident" || t0.kind === "command") &&
     t1?.kind === "operator" &&
     t1.text === "=";
+  // Not a FOR spec: junk heads from other commands' continuation (C65-style)
+  const junkHead =
+    !!t0 &&
+    ((t0.kind === "punct" && (t0.text === ")" || t0.text === "," || t0.text === ":")) ||
+      (t0.kind === "operator" && t0.text !== "@") ||
+      (t0.kind === "string" && !nextIsVar));
+  if (junkHead) {
+    return {
+      variable: null,
+      raw: "",
+      specColons: 0,
+      hasList: false,
+      hasCommandInArgs: false,
+      bareSpec: false,
+      incomplete: false,
+      range: { start: forEnd, end: forEnd },
+    };
+  }
   if (!nextIsVar && (i >= toks.length || toks[i].kind === "comment" || isCommandTok(toks[i]))) {
     return {
       variable: null,
