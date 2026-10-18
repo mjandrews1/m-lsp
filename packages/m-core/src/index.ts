@@ -351,6 +351,7 @@ export function analyse(uri: string, text: string): Analysis {
     const toks = line.tokens;
     for (const d of emptyIndirectDiagnostics(toks)) pushDiag(d);
     let idx = 0;
+    let prevWasCommand = false; // track if previous token was a command (expr position)
     // skip label — but never skip a leading known command (`F I=…`, `D FOO`).
     // A label is `NAME` or `NAME(args)`; `NAME(args)` wins even if NAME is a
     // command word (rare entry point).
@@ -372,8 +373,14 @@ export function analyse(uri: string, text: string): Analysis {
 
     while (idx < toks.length) {
       const t = toks[idx];
-      // command word
-      if (t.kind === "ident" && COMMANDS.has(t.text.toUpperCase())) {
+      // command word — but skip single-letter command names in expression
+      // position (W X writes variable X, not WRITE then XECUTE)
+      const isSingleLetterCmd = t.kind === "ident" && t.text.length === 1 &&
+        COMMANDS.has(t.text.toUpperCase());
+      const inExprPosition = idx > 0 && prevWasCommand &&
+        toks[idx - 1].kind !== "punct"; // after a command arg, not after : or ,
+      if (t.kind === "ident" && COMMANDS.has(t.text.toUpperCase()) &&
+          !(isSingleLetterCmd && inExprPosition)) {
         const up = t.text.toUpperCase();
         const full = CMD_FULL.get(t.text.toUpperCase()) ?? up;
         // H is HALT or HANG — disambiguate is not required for v1 diagnostics
@@ -449,10 +456,17 @@ export function analyse(uri: string, text: string): Analysis {
           }
         }
         idx++;
+        prevWasCommand = true;
         // post-conditional `:` immediately after command
         if (toks[idx] && toks[idx].kind === "punct" && toks[idx].text === ":") {
           const colon = toks[idx];
-          const exprStart = toks[idx + 1];
+          // `::` — double colon: postcond expression starts after second colon
+          let exprStartIdx = idx + 1;
+          if (toks[exprStartIdx] && toks[exprStartIdx].kind === "punct" &&
+              toks[exprStartIdx].text === ":") {
+            exprStartIdx++; // skip second colon
+          }
+          const exprStart = toks[exprStartIdx];
           // ISO 7.1.3: postcond is always an expression when a token follows.
           // `!` is $TEST; command words (X, I, Q, L, …) are valid *variable*
           // names in expressions (`Q:X=2`, `S:X="@"`). Only `:` / `:;comment`
@@ -475,10 +489,12 @@ export function analyse(uri: string, text: string): Analysis {
               code: "m/postcond",
             });
           }
-          idx++;
+          idx = exprStartIdx; // advance past `:` or `::` to the expression
+          prevWasCommand = false;
         }
         continue;
       }
+      prevWasCommand = false;
       // also allow a lone ident that looks like a command abbreviation already handled
       if (t.kind === "ident" && idx === 0 && COMMANDS.has(t.text.toUpperCase())) {
         idx++;
