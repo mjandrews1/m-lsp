@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { analyse } from "../packages/m-core/src/index";
-import { analyse as c3Analyse } from "../packages/c3-core/src/index";
 import { WorkspaceIndex } from "../packages/core/src/workspace";
 
-describe("workspace-wide goto (rsm#27 leftover)", () => {
+describe("workspace-wide goto", () => {
   test("M label^routine resolves into another file", () => {
     const rout = "file:///w/ROUT.m";
     const other = "file:///w/OTHER.m";
@@ -46,34 +45,6 @@ describe("workspace-wide goto (rsm#27 leftover)", () => {
     const defs = a.definitions(offset, ws);
     expect(defs.length).toBeGreaterThan(0);
     expect(defs[0].uri).toBe(fn);
-  });
-
-  test("C3 fn resolves across files via workspace index", () => {
-    const lib = "file:///w/lib.c3";
-    const main = "file:///w/main.c3";
-    const libText = "fn void helper(int n) { }\n";
-    const mainText = "fn void run() { helper(1); }\n";
-    const ws = new WorkspaceIndex();
-    ws.addFile(lib, c3Analyse(lib, libText).symbols);
-    const a = c3Analyse(main, mainText);
-    const offset = mainText.indexOf("helper");
-    const defs = a.definitions(offset, ws);
-    expect(defs.length).toBeGreaterThan(0);
-    expect(defs[0].uri).toBe(lib);
-  });
-
-  test("C3 module prefix jumps to the module file", () => {
-    const io = "file:///w/io.c3";
-    const main = "file:///w/main.c3";
-    const ioText = "fn void printn(String s) { }\n";
-    const mainText = "import io;\nfn void f() { io::printn(\"x\"); }\n";
-    const ws = new WorkspaceIndex();
-    ws.addFile(io, c3Analyse(io, ioText).symbols);
-    const a = c3Analyse(main, mainText);
-    const offset = mainText.indexOf("io::");
-    const defs = a.definitions(offset, ws);
-    expect(defs.length).toBeGreaterThan(0);
-    expect(defs[0].uri).toBe(io);
   });
 
   test("same-document still works without a workspace index", () => {

@@ -86,7 +86,7 @@ export interface Analysis {
 }
 
 export interface LanguagePlugin {
-  id: "m" | "c3";
+  id: "m";
   extensions: string[];
   analyse(uri: string, text: string): Analysis;
 }

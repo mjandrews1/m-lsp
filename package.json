@@ -6,18 +6,14 @@
   "workspaces": [
     "packages/core",
     "packages/m-core",
-    "packages/c3-core",
     "packages/server",
-    "packages/m-lint",
-    "packages/c3-lint"
+    "packages/m-lint"
   ],
   "scripts": {
     "test": "bun test",
     "server": "bun packages/server/src/main.ts",
     "m-lsp": "bun packages/server/src/main.ts",
-    "m-lint": "bun packages/m-lint/src/main.ts",
-    "c3-lint": "bun packages/c3-lint/src/main.ts",
-    "c3-lsp": "bun packages/server/src/main.ts"
+    "m-lint": "bun packages/m-lint/src/main.ts"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
